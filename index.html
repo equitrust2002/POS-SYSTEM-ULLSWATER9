@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>OmniPOS v21 - Chrome iOS</title>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <style>
+        :root {
+            --bg: #000; --surface: #1c1c1e; --accent: #32d74b; --text: #fff; 
+            --text-dim: #8e8e93; --border: #38383a; --danger: #ff453a;
+        }
+        * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; font-family: -apple-system, sans-serif; touch-action: manipulation; }
+        body { background: var(--bg); color: var(--text); margin: 0; display: flex; height: 100vh; overflow: hidden; -webkit-user-select: none; }
+        
+        /* Layout */
+        .sidebar { width: 75px; background: var(--surface); display: flex; flex-direction: column; align-items: center; padding: 25px 0; gap: 30px; border-right: 1px solid var(--border); z-index: 100; }
+        .nav-icon { color: var(--text-dim); font-size: 24px; cursor: pointer; padding: 12px; border-radius: 15px; width: 50px; height: 50px; display: flex; align-items: center; justify-content: center; }
+        .nav-icon.active { color: var(--accent); background: rgba(50, 215, 75, 0.15); border: 1px solid var(--accent); }
+
+        .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+        .viewport { display: none; flex-direction: column; height: 100%; }
+        .viewport.active { display: flex; }
+        
+        .top-bar { padding: 15px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: #1c1c1e; }
+
+        /* Scanner Display */
+        #scanner-wrapper { position: relative; width: 100%; height: 300px; background: #000; display: none; overflow: hidden; border-bottom: 2px solid var(--accent); }
+        #reader { width: 100%; height: 100%; }
+        .scan-overlay { position: absolute; inset: 0; border: 2px solid var(--accent); margin: 60px auto; width: 220px; height: 140px; border-radius: 12px; box-shadow: 0 0 0 2000px rgba(0,0,0,0.6); pointer-events: none; z-index: 5; }
+
+        /* Product Cards */
+        .inventory-grid { flex: 1; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; padding: 15px; -webkit-overflow-scrolling: touch; }
+        .item-card { background: var(--surface); border-radius: 12px; overflow: hidden; border: 1px solid var(--border); cursor: pointer; position: relative; }
+        .item-card img { width: 100%; height: 85px; object-fit: cover; pointer-events: none; }
+        .stock-tag { position: absolute; top: 4px; left: 4px; background: rgba(0,0,0,0.7); color: var(--accent); font-size: 9px; padding: 2px 5px; border-radius: 4px; }
+        
+        /* Checkout Panel */
+        .cart-panel { width: 340px; background: var(--surface); display: flex; flex-direction: column; border-left: 1px solid var(--border); }
+        .cart-list { flex: 1; overflow-y: auto; padding: 10px; -webkit-overflow-scrolling: touch; }
+        .checkout-box { padding: 15px; border-top: 1px solid var(--border); background: var(--bg); padding-bottom: calc(15px + env(safe-area-inset-bottom)); }
+        
+        /* Chrome-Ready Buttons */
+        .btn-main { width: 100%; background: var(--accent); color: #000; border: none; padding: 16px; border-radius: 12px; font-weight: 800; font-size: 15px; cursor: pointer; margin-bottom: 8px; }
+        .btn-pdf { width: 100%; background: #fff; color: #000; border: none; padding: 12px; border-radius: 12px; font-weight: 700; font-size: 13px; cursor: pointer; margin-bottom: 8px; }
+        .btn-void { background: none; border: none; color: var(--danger); font-weight: bold; font-size: 11px; width: 100%; cursor: pointer; padding: 10px; }
+        .btn-csv { background: #2c2c2e; color: #fff; border: 1px solid var(--border); padding: 8px 12px; border-radius: 8px; font-size: 10px; }
+
+        /* Tables */
+        .table-scroll { flex: 1; overflow: auto; padding: 10px; -webkit-overflow-scrolling: touch; }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 450px; }
+        th { color: var(--accent); text-align: left; padding: 12px; border-bottom: 2px solid var(--border); background: var(--bg); }
+        td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+        .edit-input { background: #2c2c2e; border: 1px solid var(--border); color: #fff; width: 100%; padding: 8px; border-radius: 6px; font-size: 14px; }
+
+        /* Print Override */
+        #receipt-p { display: none; }
+        @media print {
+            body > *:not(#receipt-p) { display: none !important; }
+            #receipt-p { display: block !important; width: 75mm; margin: 0; color: #000; background: #fff; padding: 10px; font-family: 'Courier New', monospace; font-size: 10pt; }
+        }
+
+        /* Modals */
+        .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.9); display: none; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
+        .modal-body { background: var(--surface); padding: 25px; border-radius: 20px; width: 100%; max-width: 380px; }
+    </style>
+</head>
+<body>
+
+<nav class="sidebar">
+    <div class="nav-icon active" id="btn-tab-pos">🛒</div>
+    <div class="nav-icon" id="btn-tab-inv">📊</div>
+    <div class="nav-icon" id="btn-tab-logs">📜</div>
+    <div class="nav-icon" id="btn-tab-cfg">⚙️</div>
+</nav>
+
+<div class="main-content">
+    <div id="tab-pos" class="viewport active">
+        <div class="top-bar">
+            <h2 id="disp-store-name" style="color:var(--accent); margin:0; font-size:18px;">APEX CHROME</h2>
+            <button id="btn-add-item-trigger" style="background:var(--accent); color:#000; border:none; padding:8px 15px; border-radius:10px; font-weight:800; font-size:11px;">+ ADD</button>
+        </div>
+        <div id="scanner-wrapper">
+            <div id="reader"></div>
+            <div class="scan-overlay"></div>
+            <button id="btn-scanner-close" style="position:absolute; bottom:15px; right:15px; background:var(--danger); color:#fff; border:none; padding:10px 15px; border-radius:10px; font-weight:bold; z-index:10;">OFF</button>
+        </div>
+        <div class="inventory-grid" id="posGrid"></div>
+    </div>
+
+    <div id="tab-inv" class="viewport">
+        <div class="top-bar">
+            <h2 style="font-size:16px;">Stock Manager</h2>
+            <div style="display:flex; gap:5px;">
+                <button id="btn-csv-export" class="btn-csv">Exp</button>
+                <button id="btn-csv-import-trigger" class="btn-csv" style="background:var(--accent); color:#000;">Imp</button>
+                <input type="file" id="csvInput" style="display:none" accept=".csv">
+            </div>
+        </div>
+        <div class="table-scroll">
+            <table>
+                <thead><tr><th>Code</th><th>Name</th><th>Price</th><th>Stock</th><th>X</th></tr></thead>
+                <tbody id="invTableBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="tab-logs" class="viewport">
+        <div class="top-bar"><h2>History</h2></div>
+        <div class="table-scroll"><table><thead><tr><th>Ref</th><th>Total</th><th>Date</th></tr></thead><tbody id="logsTableBody"></tbody></table></div>
+    </div>
+
+    <div id="tab-cfg" class="viewport">
+        <div class="top-bar"><h2>Branding</h2></div>
+        <div style="padding:20px;">
+            <input type="text" id="cfg-name" placeholder="Business Name" class="edit-input" style="margin-bottom:12px;">
+            <input type="text" id="cfg-sub" placeholder="Business Info" class="edit-input" style="margin-bottom:12px;">
+            <input type="text" id="cfg-foot" placeholder="Receipt Footer" class="edit-input" style="margin-bottom:20px;">
+            <button id="btn-cfg-save" class="btn-main">SAVE BRANDING</button>
+        </div>
+    </div>
+</div>
+
+<div class="cart-panel">
+    <div style="padding:12px; font-weight:900; font-size:10px; color:var(--accent); background:#2c2c2e; border-bottom:1px solid var(--border);">ACTIVE TERMINAL</div>
+    <div class="cart-list" id="cartItems"></div>
+    <div class="checkout-box">
+        <input type="text" id="custName" placeholder="Customer Name" style="width:100%; background:var(--surface); border:1px solid var(--border); color:#fff; padding:12px; border-radius:10px; margin-bottom:12px; font-size:16px;">
+        <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
+            <span style="color:var(--text-dim); font-size:14px;">TOTAL</span>
+            <span id="grandTotal" style="color:var(--accent); font-weight:900; font-size:24px;">₱0.00</span>
+        </div>
+        <button class="btn-pdf" id="btn-sale-pdf">SAVE PDF / SHARE</button>
+        <button class="btn-main" id="btn-sale-print">PRINT RECEIPT</button>
+        <button class="btn-void" id="btn-sale-void">CLEAR CART</button>
+    </div>
+</div>
+
+<div id="btn-scan-trigger" style="position:fixed; bottom:25px; right:370px; width:65px; height:65px; background:var(--accent); border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:28px; z-index:99; box-shadow:0 8px 25px rgba(0,0,0,0.5);">📷</div>
+
+<div class="modal" id="itemModal">
+    <div class="modal-body">
+        <h3 style="color:var(--accent); margin:0 0 15px 0;">New Product</h3>
+        <input type="text" id="m-code" placeholder="Barcode Code" class="edit-input" style="margin-bottom:10px;">
+        <input type="text" id="m-name" placeholder="Item Name" class="edit-input" style="margin-bottom:10px;">
+        <input type="number" id="m-price" placeholder="Price" class="edit-input" style="margin-bottom:10px;">
+        <input type="number" id="m-stock" placeholder="Initial Stock" class="edit-input" style="margin-bottom:15px;">
+        <input type="file" id="m-img" accept="image/*" style="font-size:10px; margin-bottom:20px;">
+        <button id="btn-modal-save" class="btn-main">ADD TO SYSTEM</button>
+        <button id="btn-modal-close" class="btn-void">CANCEL</button>
+    </div>
+</div>
+
+<div id="receipt-p">
+    <div style="text-align:center; border-bottom:1px solid #000; padding-bottom:10px; margin-bottom:10px;">
+        <h2 id="r-head" style="margin:0;"></h2>
+        <p id="r-sub" style="margin:5px 0; font-size:9pt;"></p>
+    </div>
+    <div id="r-items"></div>
+    <div style="border-top:1px solid #000; margin-top:10px; padding-top:10px;">
+        <div style="display:flex; justify-content:space-between; font-weight:bold; font-size:12pt;">
+            <span>TOTAL AMOUNT:</span><span id="r-total"></span>
+        </div>
+    </div>
+    <div style="text-align:center; margin-top:20px; font-size:8pt;">
+        <p id="r-foot"></p>
+        <p>Ref: #<span id="r-id"></span> | <span id="r-date"></span></p>
+    </div>
+</div>
+
+<script>
+    // --- STATE MANAGEMENT ---
+    let inventory = JSON.parse(localStorage.getItem('apex_v21_inv')) || [];
+    let logs = JSON.parse(localStorage.getItem('apex_v21_logs')) || [];
+    let config = JSON.parse(localStorage.getItem('apex_v21_cfg')) || { name: "ZENITH APEX", sub: "Titan District, PH", foot: "Keep your receipt for returns", ref: 21001 };
+    let cart = [];
+    let scanner = null;
+
+    // --- CHROME iOS "ULTIMATE" EVENT ATTACHMENT ---
+    // This function ensures buttons work regardless of touch or pointer events
+    function bind(id, fn) {
+        const el = document.getElementById(id);
+        if(!el) return;
+        el.addEventListener('pointerdown', (e) => { e.preventDefault(); fn(e); });
+    }
+
+    // --- SCANNER ENGINE ---
+    async function startScanner(mode) {
+        document.getElementById('scanner-wrapper').style.display = 'block';
+        if (!scanner) scanner = new Html5Qrcode("reader");
+        
+        const qConfig = { fps: 20, qrbox: { width: 220, height: 140 }, aspectRatio: 1.0 };
+        try {
+            await scanner.start({ facingMode: "environment" }, qConfig, (decoded) => {
+                if(mode === 'ticker') {
+                    const idx = inventory.findIndex(i => i.code === decoded);
+                    if(idx !== -1) { addToCart(idx); if(navigator.vibrate) navigator.vibrate(80); }
+                } else {
+                    document.getElementById('m-code').value = decoded;
+                    stopScanning();
+                }
+            });
+        } catch (e) { alert("Enable Camera in Chrome Settings"); stopScanning(); }
+    }
+
+    function stopScanning() {
+        if(scanner) scanner.stop().then(() => { document.getElementById('scanner-wrapper').style.display='none'; });
+    }
+
+    // --- RENDER ENGINE ---
+    function renderGrid() {
+        const grid = document.getElementById('posGrid');
+        grid.innerHTML = inventory.map((i, idx) => `
+            <div class="item-card" data-idx="${idx}">
+                <div class="stock-tag">${i.stock}</div>
+                <img src="${i.img || 'https://via.placeholder.com/150'}">
+                <div style="padding:8px; font-size:11px;"><strong>${i.name}</strong><br>₱${i.price}</div>
+            </div>
+        `).join('');
+
+        // Re-bind touch for cards
+        document.querySelectorAll('.item-card').forEach(card => {
+            card.addEventListener('pointerdown', () => addToCart(card.dataset.idx));
+        });
+        document.getElementById('disp-store-name').innerText = config.name;
+    }
+
+    function addToCart(idx) {
+        const item = inventory[idx];
+        if(item.stock <= 0) { alert("No stock!"); return; }
+        const exist = cart.find(c => c.code === item.code);
+        if(exist) exist.qty++; else cart.push({...item, qty: 1});
+        updateCart();
+    }
+
+    function updateCart() {
+        let total = 0;
+        document.getElementById('cartItems').innerHTML = cart.map((i, idx) => {
+            total += (i.price * i.qty);
+            return `<div style="display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--border); font-size:12px;">
+                <div><strong>${i.name}</strong><br>₱${i.price} x ${i.qty}</div>
+                <div class="void-item" data-idx="${idx}" style="color:var(--danger); font-weight:bold; padding:5px;">VOID</div>
+            </div>`;
+        }).join('');
+        
+        document.querySelectorAll('.void-item').forEach(btn => {
+            btn.addEventListener('pointerdown', () => { cart.splice(btn.dataset.idx, 1); updateCart(); });
+        });
+        document.getElementById('grandTotal').innerText = "₱" + total.toLocaleString();
+    }
+
+    function processSale() {
+        if(cart.length === 0) return;
+        
+        // Deduction Logic
+        cart.forEach(c => {
+            const invItem = inventory.find(i => i.code === c.code);
+            if(invItem) invItem.stock -= c.qty;
+        });
+
+        const total = document.getElementById('grandTotal').innerText;
+        const refId = config.ref++;
+        const now = new Date().toLocaleString();
+
+        // Print Mapping
+        document.getElementById('r-head').innerText = config.name;
+        document.getElementById('r-sub').innerText = config.sub;
+        document.getElementById('r-foot').innerText = config.foot;
+        document.getElementById('r-id').innerText = refId;
+        document.getElementById('r-date').innerText = now;
+        document.getElementById('r-total').innerText = total;
+        document.getElementById('r-items').innerHTML = cart.map(i => `
+            <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                <span>${i.qty} x ${i.name}</span>
+                <span>${(i.qty * i.price).toFixed(2)}</span>
+            </div>`).join('');
+        
+        logs.unshift({id: refId, total, date: now});
+        saveData();
+        window.print();
+        clearCart();
+    }
+
+    // --- INVENTORY MASTER ---
+    function renderInv() {
+        document.getElementById('invTableBody').innerHTML = inventory.map((i, idx) => `
+            <tr>
+                <td>${i.code}</td>
+                <td><input class="edit-input" value="${i.name}" oninput="inventory[${idx}].name=this.value; saveData()"></td>
+                <td><input class="edit-input" type="number" value="${i.price}" oninput="inventory[${idx}].price=parseFloat(this.value); saveData()"></td>
+                <td><input class="edit-input" type="number" value="${i.stock}" oninput="inventory[${idx}].stock=parseInt(this.value); saveData()"></td>
+                <td style="text-align:center;"><span class="del-btn" data-idx="${idx}" style="color:var(--danger); font-size:16px;">🗑️</span></td>
+            </tr>
+        `).join('');
+
+        document.querySelectorAll('.del-btn').forEach(btn => {
+            btn.addEventListener('pointerdown', () => { if(confirm("Delete item?")) { inventory.splice(btn.dataset.idx,1); saveData(); renderInv(); } });
+        });
+    }
+
+    // --- DATA UTILS ---
+    function saveData() {
+        localStorage.setItem('apex_v21_inv', JSON.stringify(inventory));
+        localStorage.setItem('apex_v21_logs', JSON.stringify(logs));
+        localStorage.setItem('apex_v21_cfg', JSON.stringify(config));
+        renderGrid();
+    }
+
+    function clearCart() { cart = []; updateCart(); document.getElementById('custName').value=""; }
+
+    function showTab(id, activeBtnId) {
+        document.querySelectorAll('.viewport').forEach(v => v.classList.remove('active'));
+        document.querySelectorAll('.nav-icon').forEach(n => n.classList.remove('active'));
+        document.getElementById(id).classList.add('active');
+        document.getElementById(activeBtnId).classList.add('active');
+        if(id === 'tab-inv') renderInv();
+        if(id === 'tab-logs') {
+            document.getElementById('logsTableBody').innerHTML = logs.map(l => `<tr><td>#${l.id}</td><td>${l.total}</td><td>${l.date}</td></tr>`).join('');
+        }
+    }
+
+    // --- BINDING ALL BUTTONS ---
+    bind('btn-tab-pos', () => showTab('tab-pos', 'btn-tab-pos'));
+    bind('btn-tab-inv', () => showTab('tab-inv', 'btn-tab-inv'));
+    bind('btn-tab-logs', () => showTab('tab-logs', 'btn-tab-logs'));
+    bind('btn-tab-cfg', () => showTab('tab-cfg', 'btn-tab-cfg'));
+    
+    bind('btn-add-item-trigger', () => { document.getElementById('itemModal').style.display='flex'; });
+    bind('btn-modal-close', () => { document.getElementById('itemModal').style.display='none'; });
+    bind('btn-scanner-close', stopScanning);
+    bind('btn-scan-trigger', () => startScanner('ticker'));
+    
+    bind('btn-sale-print', processSale);
+    bind('btn-sale-pdf', processSale);
+    bind('btn-sale-void', clearCart);
+    
+    bind('btn-cfg-save', () => {
+        config.name = document.getElementById('cfg-name').value;
+        config.sub = document.getElementById('cfg-sub').value;
+        config.foot = document.getElementById('cfg-foot').value;
+        saveData(); alert("Branding Updated!");
+    });
+
+    bind('btn-modal-save', () => {
+        const item = { 
+            code: document.getElementById('m-code').value, 
+            name: document.getElementById('m-name').value, 
+            price: parseFloat(document.getElementById('m-price').value) || 0, 
+            stock: parseInt(document.getElementById('m-stock').value) || 0, 
+            img: '' 
+        };
+        const file = document.getElementById('m-img').files[0];
+        if(file) {
+            const r = new FileReader(); 
+            r.onload=(e)=>{ item.img=e.target.result; inventory.push(item); saveData(); document.getElementById('itemModal').style.display='none'; }; 
+            r.readAsDataURL(file);
+        } else { inventory.push(item); saveData(); document.getElementById('itemModal').style.display='none'; }
+    });
+
+    bind('btn-csv-export', () => {
+        let csv = "Barcode,Name,Price,Stock\n" + inventory.map(i => `"${i.code}","${i.name}",${i.price},${i.stock}`).join("\n");
+        const blob = new Blob([csv], {type:'text/csv'});
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'Inventory.csv'; a.click();
+    });
+
+    bind('btn-csv-import-trigger', () => document.getElementById('csvInput').click());
+    document.getElementById('csvInput').addEventListener('change', (e) => {
+        const reader = new FileReader();
+        reader.onload = (f) => {
+            const rows = f.target.result.split('\n').slice(1);
+            inventory = rows.map(r => {
+                const c = r.split(',');
+                if(c.length < 4) return null;
+                return { code: c[0].replace(/"/g,''), name: c[1].replace(/"/g,''), price: parseFloat(c[2]), stock: parseFloat(c[3]), img: '' };
+            }).filter(i => i !== null);
+            saveData(); renderInv(); alert("Imported!");
+        };
+        reader.readAsText(e.target.files[0]);
+    });
+
+    window.onload = () => {
+        renderGrid();
+        document.getElementById('cfg-name').value = config.name;
+        document.getElementById('cfg-sub').value = config.sub;
+        document.getElementById('cfg-foot').value = config.foot;
+    };
+</script>
+</body>
+</html>
